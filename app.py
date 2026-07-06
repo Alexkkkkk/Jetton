@@ -104,10 +104,17 @@ _SECRET_KEY = _resolve_secret_key()
 app.config["SECRET_KEY"] = _SECRET_KEY
 app.secret_key = _SECRET_KEY
 
-# ── База данных — берётся из переменной окружения DATABASE_URL (Replit PostgreSQL) ───
+# ── База данных — PostgreSQL если есть DATABASE_URL, иначе SQLite fallback ───
 _DATABASE_URL = os.environ.get("DATABASE_URL")
 if not _DATABASE_URL:
-    raise RuntimeError("DATABASE_URL environment variable is not set")
+    import warnings
+    warnings.warn(
+        "DATABASE_URL не задан — используется SQLite fallback (данные не сохранятся между деплоями). "
+        "Подключите PostgreSQL через Replit Database для продакшена.",
+        RuntimeWarning,
+        stacklevel=1,
+    )
+    _DATABASE_URL = "sqlite:///grinch_gram.db"
 app.config["SQLALCHEMY_DATABASE_URI"] = _DATABASE_URL
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {"pool_recycle": 300, "pool_pre_ping": True}
 db.init_app(app)
