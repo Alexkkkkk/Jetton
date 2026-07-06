@@ -649,11 +649,11 @@ class AIEngine:
         #   ULTRA_LOW_MEMORY=1 — 2 модели (HGB+MLP), пик ~30-40 MB
         #   LOW_MEMORY=1       — 4 модели (RF+HGB+XGB+MLP), пик ~60-80 MB  (рекомендуется для Bothost)
         #   (по умолчанию)     — 6+ моделей, пик ~300 MB
-        _ultra   = os.environ.get("ULTRA_LOW_MEMORY", "0").strip() not in ("0", "", "false", "no")
-        _low_mem = _ultra or (os.environ.get("LOW_MEMORY", "0").strip() not in ("0", "", "false", "no"))
+        _ultra   = os.environ.get("ULTRA_LOW_MEMORY", "0").strip().lower() not in ("0", "", "false", "no")
+        _low_mem = _ultra or (os.environ.get("LOW_MEMORY", "0").strip().lower() not in ("0", "", "false", "no"))
 
         if _ultra:
-            # ── ULTRA-LOW-MEMORY: 2 модели ──────────────────────────────────
+            # ── ULTRA-LOW-MEMORY: 2 модели (HGB или RF fallback) + MLP ──────
             self._slots = []
             if _HAS_HGB:
                 self._slots.append(_ModelSlot("HGB", Pipeline([
@@ -661,6 +661,14 @@ class AIEngine:
                         max_iter=50, max_depth=4, learning_rate=0.05,
                         min_samples_leaf=5, l2_regularization=0.05, random_state=42))
                 ])))
+            else:
+                # Fallback если HistGradientBoosting недоступен
+                self._slots.append(_ModelSlot("RF", _make_pipeline(
+                    RandomForestClassifier(
+                        n_estimators=30, max_depth=5, min_samples_split=4,
+                        min_samples_leaf=3, max_features="sqrt",
+                        class_weight="balanced", random_state=42, n_jobs=1)
+                )))
             self._slots.append(_ModelSlot("MLP", Pipeline([
                 ("scaler", RobustScaler()),
                 ("clf", MLPClassifier(
@@ -1253,6 +1261,8 @@ class AIEngine:
                 slot.fit(X_arr, y_arr, sample_weight=w_arr)
             except Exception as e:
                 log.debug(f"[AI:{slot.name}] refit error: {e}")
+            # Освобождаем память между рефитами (важно при LOW_MEMORY)
+            gc.collect()
 
         self._trained = True
         self._new_confirms = 0
