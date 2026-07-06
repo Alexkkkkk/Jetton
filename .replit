@@ -1,5 +1,40 @@
+modules = ["python-base-3.13"]
 [agent]
 expertMode = true
 
 [nix]
 channel = "stable-25_05"
+packages = ["cargo", "glibcLocales", "iana-etc", "libiconv", "libxcrypt", "openssl", "pkg-config", "rustc"]
+
+[userenv]
+
+[userenv.shared]
+ADMIN_USERNAME = "kank49799@gmail.com"
+DEMO_MODE = "false"
+MIN_STAKE_TON = "5"
+SMART_TP_ENABLED = "1"
+TRADE_MODE = "dedust"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "uv run python3 main.py"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
