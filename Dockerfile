@@ -18,6 +18,9 @@ COPY . .
 RUN mkdir -p /app/data
 
 ENV PORT=3000
+# LOW_MEMORY=1 — уменьшает размер AI-моделей (~80MB пик вместо ~300MB).
+# Обязательно для Bothost и других Docker-хостов с ограниченным RAM.
+ENV LOW_MEMORY=1
 EXPOSE 3000
 
 # Health check: Bothost nginx начнёт роутить трафик только когда /health отвечает 200
