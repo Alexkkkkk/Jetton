@@ -29,6 +29,7 @@ AI Engine v4 — QuantumBrain ULTRA: World-Class Self-Learning Trading AI for GR
   • Полная персистентность: PostgreSQL + experience.json
 """
 
+import gc
 import os
 import numpy as np
 import pandas as pd
@@ -644,83 +645,124 @@ class AIEngine:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _build_models(self):
-        # LOW_MEMORY=1 — уменьшенные модели для Bothost/Docker с ограниченным RAM.
-        # При LOW_MEMORY RAM-пик обучения ~80-100MB вместо ~300MB.
-        _low_mem = os.environ.get("LOW_MEMORY", "0").strip() not in ("0", "", "false", "no")
+        # Режимы памяти (задаются через env-переменные):
+        #   ULTRA_LOW_MEMORY=1 — 2 модели (HGB+MLP), пик ~30-40 MB
+        #   LOW_MEMORY=1       — 4 модели (RF+HGB+XGB+MLP), пик ~60-80 MB  (рекомендуется для Bothost)
+        #   (по умолчанию)     — 6+ моделей, пик ~300 MB
+        _ultra   = os.environ.get("ULTRA_LOW_MEMORY", "0").strip() not in ("0", "", "false", "no")
+        _low_mem = _ultra or (os.environ.get("LOW_MEMORY", "0").strip() not in ("0", "", "false", "no"))
 
-        if _low_mem:
-            rf_n, rf_d   = 80,  7
-            et_n, et_d   = 60,  7
-            gb_n, gb_d   = 80,  4
-            hgb_n, hgb_d = 80,  5
-            xgb_n, xgb_d = 100, 5
-            lgb_n        = 100
-            mlp_layers   = (128, 64, 32)
-            mlp_iter     = 200
+        if _ultra:
+            # ── ULTRA-LOW-MEMORY: 2 модели ──────────────────────────────────
+            self._slots = []
+            if _HAS_HGB:
+                self._slots.append(_ModelSlot("HGB", Pipeline([
+                    ("clf", HistGradientBoostingClassifier(
+                        max_iter=50, max_depth=4, learning_rate=0.05,
+                        min_samples_leaf=5, l2_regularization=0.05, random_state=42))
+                ])))
+            self._slots.append(_ModelSlot("MLP", Pipeline([
+                ("scaler", RobustScaler()),
+                ("clf", MLPClassifier(
+                    hidden_layer_sizes=(64, 32),
+                    activation="relu", solver="adam",
+                    alpha=5e-4, learning_rate="adaptive", learning_rate_init=0.001,
+                    max_iter=100, early_stopping=True, n_iter_no_change=15,
+                    validation_fraction=0.15, random_state=42))
+            ])))
+
+        elif _low_mem:
+            # ── LOW-MEMORY: 4 модели, без GB/ET/LGB ─────────────────────────
+            self._slots = [
+                _ModelSlot("RF", _make_pipeline(
+                    RandomForestClassifier(
+                        n_estimators=50, max_depth=6, min_samples_split=4,
+                        min_samples_leaf=3, max_features="sqrt",
+                        class_weight="balanced", random_state=42, n_jobs=1)
+                )),
+            ]
+            if _HAS_HGB:
+                self._slots.append(_ModelSlot("HGB", Pipeline([
+                    ("clf", HistGradientBoostingClassifier(
+                        max_iter=70, max_depth=5, learning_rate=0.05,
+                        min_samples_leaf=5, l2_regularization=0.05, random_state=42))
+                ])))
+            if _HAS_XGB:
+                self._slots.append(_ModelSlot("XGB", Pipeline([
+                    ("scaler", StandardScaler()),
+                    ("clf", XGBClassifier(
+                        n_estimators=60, max_depth=4, learning_rate=0.05,
+                        subsample=0.75, colsample_bytree=0.75, min_child_weight=3,
+                        gamma=0.1, reg_alpha=0.2, reg_lambda=1.0,
+                        eval_metric="mlogloss", verbosity=0,
+                        random_state=42))
+                ])))
+            self._slots.append(_ModelSlot("MLP", Pipeline([
+                ("scaler", RobustScaler()),
+                ("clf", MLPClassifier(
+                    hidden_layer_sizes=(64, 32),
+                    activation="relu", solver="adam",
+                    alpha=5e-4, learning_rate="adaptive", learning_rate_init=0.001,
+                    max_iter=150, early_stopping=True, n_iter_no_change=15,
+                    validation_fraction=0.15, random_state=42))
+            ])))
+
         else:
-            rf_n, rf_d   = 300, 10
-            et_n, et_d   = 250, 9
-            gb_n, gb_d   = 200, 5
-            hgb_n, hgb_d = 300, 7
-            xgb_n, xgb_d = 400, 6
-            lgb_n        = 500
-            mlp_layers   = (256, 128, 64, 32)
-            mlp_iter     = 500
+            # ── FULL: 6+ моделей ─────────────────────────────────────────────
+            self._slots = [
+                _ModelSlot("RF", _make_pipeline(
+                    RandomForestClassifier(
+                        n_estimators=300, max_depth=10, min_samples_split=3,
+                        min_samples_leaf=2, max_features="sqrt",
+                        class_weight="balanced", random_state=42, n_jobs=1)
+                )),
+                _ModelSlot("ET", _make_pipeline(
+                    ExtraTreesClassifier(
+                        n_estimators=250, max_depth=9, min_samples_split=3,
+                        class_weight="balanced", random_state=7, n_jobs=1)
+                )),
+                _ModelSlot("GB", _make_pipeline(
+                    GradientBoostingClassifier(
+                        n_estimators=200, max_depth=5, learning_rate=0.03,
+                        subsample=0.75, min_samples_leaf=2, random_state=42)
+                )),
+            ]
+            if _HAS_HGB:
+                self._slots.append(_ModelSlot("HGB", Pipeline([
+                    ("clf", HistGradientBoostingClassifier(
+                        max_iter=300, max_depth=7, learning_rate=0.03,
+                        min_samples_leaf=5, l2_regularization=0.05, random_state=42))
+                ])))
+            if _HAS_XGB:
+                self._slots.append(_ModelSlot("XGB", Pipeline([
+                    ("scaler", StandardScaler()),
+                    ("clf", XGBClassifier(
+                        n_estimators=400, max_depth=6, learning_rate=0.03,
+                        subsample=0.75, colsample_bytree=0.75, min_child_weight=2,
+                        gamma=0.05, reg_alpha=0.1, reg_lambda=0.8,
+                        eval_metric="mlogloss", verbosity=0,
+                        random_state=42))
+                ])))
+            # LightGBM v4: быстрее XGBoost, лучше на малых данных GRINCH
+            if _HAS_LGB:
+                self._slots.append(_ModelSlot("LGB", Pipeline([
+                    ("scaler", StandardScaler()),
+                    ("clf", LGBMClassifier(
+                        n_estimators=500, max_depth=6, learning_rate=0.03,
+                        num_leaves=63, subsample=0.75, colsample_bytree=0.75,
+                        min_child_samples=5, reg_alpha=0.1, reg_lambda=0.8,
+                        class_weight="balanced", verbosity=-1, random_state=42))
+                ])))
+            self._slots.append(_ModelSlot("MLP", Pipeline([
+                ("scaler", RobustScaler()),
+                ("clf", MLPClassifier(
+                    hidden_layer_sizes=(256, 128, 64, 32),
+                    activation="relu", solver="adam",
+                    alpha=5e-4, learning_rate="adaptive", learning_rate_init=0.001,
+                    max_iter=500, early_stopping=True, n_iter_no_change=20,
+                    validation_fraction=0.15, random_state=42))
+            ])))
 
-        self._slots = [
-            _ModelSlot("RF", _make_pipeline(
-                RandomForestClassifier(
-                    n_estimators=rf_n, max_depth=rf_d, min_samples_split=3,
-                    min_samples_leaf=2, max_features="sqrt",
-                    class_weight="balanced", random_state=42, n_jobs=1)
-            )),
-            _ModelSlot("ET", _make_pipeline(
-                ExtraTreesClassifier(
-                    n_estimators=et_n, max_depth=et_d, min_samples_split=3,
-                    class_weight="balanced", random_state=7, n_jobs=1)
-            )),
-            _ModelSlot("GB", _make_pipeline(
-                GradientBoostingClassifier(
-                    n_estimators=gb_n, max_depth=gb_d, learning_rate=0.03,
-                    subsample=0.75, min_samples_leaf=2, random_state=42)
-            )),
-        ]
-        if _HAS_HGB:
-            self._slots.append(_ModelSlot("HGB", Pipeline([
-                ("clf", HistGradientBoostingClassifier(
-                    max_iter=hgb_n, max_depth=hgb_d, learning_rate=0.03,
-                    min_samples_leaf=5, l2_regularization=0.05, random_state=42))
-            ])))
-        if _HAS_XGB:
-            self._slots.append(_ModelSlot("XGB", Pipeline([
-                ("scaler", StandardScaler()),
-                ("clf", XGBClassifier(
-                    n_estimators=xgb_n, max_depth=xgb_d, learning_rate=0.03,
-                    subsample=0.75, colsample_bytree=0.75, min_child_weight=2,
-                    gamma=0.05, reg_alpha=0.1, reg_lambda=0.8,
-                    eval_metric="mlogloss", verbosity=0,
-                    random_state=42))
-            ])))
-        # LightGBM v4: быстрее XGBoost, лучше на малых данных GRINCH
-        if _HAS_LGB:
-            self._slots.append(_ModelSlot("LGB", Pipeline([
-                ("scaler", StandardScaler()),
-                ("clf", LGBMClassifier(
-                    n_estimators=lgb_n, max_depth=xgb_d, learning_rate=0.03,
-                    num_leaves=63, subsample=0.75, colsample_bytree=0.75,
-                    min_child_samples=5, reg_alpha=0.1, reg_lambda=0.8,
-                    class_weight="balanced", verbosity=-1, random_state=42))
-            ])))
-        # MLP: глубже + Dropout-эффект через higher alpha
-        self._slots.append(_ModelSlot("MLP", Pipeline([
-            ("scaler", RobustScaler()),
-            ("clf", MLPClassifier(
-                hidden_layer_sizes=mlp_layers,
-                activation="relu", solver="adam",
-                alpha=5e-4, learning_rate="adaptive", learning_rate_init=0.001,
-                max_iter=mlp_iter, early_stopping=True, n_iter_no_change=20,
-                validation_fraction=0.15, random_state=42))
-        ])))
         # Kelly trade history
         self._kelly_wins:   deque = deque(maxlen=KELLY_LOOKBACK)
         self._kelly_pnls:   deque = deque(maxlen=KELLY_LOOKBACK)
@@ -785,18 +827,23 @@ class AIEngine:
         for i, slot in enumerate(self._slots):
             start_pct = 36 + i * pct_per_step
             name_label = {
-                "RF":  "🌲 RandomForest (200 деревьев, глубина 8)",
-                "ET":  "⚡ ExtraTrees (150 деревьев — быстрый дивергент)",
-                "GB":  "🚀 GradientBoosting (120 итераций, subsample 0.8)",
-                "HGB": "💥 HistGradientBoosting (XGBoost-режим, 150 эпох)",
+                "RF":  "🌲 RandomForest",
+                "ET":  "⚡ ExtraTrees",
+                "GB":  "🚀 GradientBoosting",
+                "HGB": "💥 HistGradientBoosting",
+                "XGB": "🔥 XGBoost",
+                "LGB": "🌿 LightGBM",
+                "MLP": "🧠 NeuralNet",
             }.get(slot.name, slot.name)
             emit(f"model_{i}", start_pct, f"{name_label}...")
-            time.sleep(0.15)
+            time.sleep(0.1)
             with self._lock:
                 slot.fit(X, y)
+            # Освобождаем память между обучением моделей (важно при LOW_MEMORY)
+            gc.collect()
             emit(f"model_{i}", start_pct + pct_per_step * 0.9,
                  f"{name_label} ✓", len(X))
-            time.sleep(0.1)
+            time.sleep(0.05)
 
         with self._lock:
             self._trained = True
