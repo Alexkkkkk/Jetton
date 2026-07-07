@@ -102,7 +102,7 @@ def _init_pool():
         return
     try:
         p = psycopg2.pool.ThreadedConnectionPool(
-            minconn=2, maxconn=16,
+            minconn=1, maxconn=4,
             dsn=DATABASE_URL,
             connect_timeout=10,
         )

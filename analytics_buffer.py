@@ -21,8 +21,8 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ─── Размеры буферов ──────────────────────────────────────────────────────────
-TICK_BUFFER_SIZE  = 400   # ~100 мин при тике 15 сек (≈ сессионный контекст)
-TRADE_BUFFER_SIZE = 100   # последние 100 событий сделок (OPEN/CLOSE)
+TICK_BUFFER_SIZE  = 100   # ~25 мин при тике 15 сек (снижено для экономии RAM)
+TRADE_BUFFER_SIZE = 50    # последние 50 событий сделок (снижено для экономии RAM)
 
 GRINCH_DEDUST_URL  = "https://dedust.io/coins/EQA6G0uVERDZTkLNa0drWBna1F5TSbogy7UXEWU5ERHz4uJL"
 GRINCH_TOKEN_ADDR  = "EQA6G0uVERDZTkLNa0drWBna1F5TSbogy7UXEWU5ERHz4uJL"

@@ -18,14 +18,15 @@ COPY . .
 RUN mkdir -p /app/data
 
 ENV PORT=3000
-# LOW_MEMORY=1 — уменьшает размер AI-моделей (~80MB пик вместо ~300MB).
-# Обязательно для Bothost и других Docker-хостов с ограниченным RAM.
-ENV LOW_MEMORY=1
+# ULTRA_LOW_MEMORY=1 — только 2 модели (HGB+MLP), пик ~30-40 MB.
+# Обязательно для Bothost с ограниченным RAM (предотвращает OOM crash loop).
+ENV ULTRA_LOW_MEMORY=1
 EXPOSE 3000
 
 # Health check: Bothost nginx начнёт роутить трафик только когда /health отвечает 200
 HEALTHCHECK --interval=15s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:3000/health || exit 1
 
-# Gunicorn: 1 воркер + 8 тредов — обязательно для Flask-SocketIO (async_mode=threading)
-CMD ["gunicorn", "--bind", "0.0.0.0:3000", "--workers", "1", "--threads", "8", "--timeout", "120", "main:app"]
+# Gunicorn: 1 воркер + 4 треда — обязательно для Flask-SocketIO (async_mode=threading).
+# 4 треда вместо 8: каждый тред держит стек ~8MB, экономим ~32MB RAM.
+CMD ["gunicorn", "--bind", "0.0.0.0:3000", "--workers", "1", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "main:app"]
