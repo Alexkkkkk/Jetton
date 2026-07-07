@@ -38,6 +38,18 @@ import time
 import logging
 from collections import deque
 
+
+def _rss_mb() -> float:
+    """Текущий RSS памяти процесса в МБ (из /proc/self/status, без psutil)."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        pass
+    return 0.0
+
 from sklearn.ensemble import (
     RandomForestClassifier,
     GradientBoostingClassifier,
@@ -832,6 +844,11 @@ class AIEngine:
         model_names  = [s.name for s in self._slots]
         pct_per_step = (82 - 36) / max(len(self._slots), 1)
 
+        low_mem_mode = os.environ.get("LOW_MEMORY", "0").strip().lower() not in ("0", "", "false", "no")
+        ultra_mode   = os.environ.get("ULTRA_LOW_MEMORY", "0").strip().lower() not in ("0", "", "false", "no")
+        mem_tag = "[ULTRA]" if ultra_mode else ("[LOW_MEM]" if low_mem_mode else "[FULL]")
+        log.info(f"[AI] pretrain START {mem_tag} · {len(self._slots)} моделей · RAM={_rss_mb():.0f} MB · samples={len(X)}")
+
         for i, slot in enumerate(self._slots):
             start_pct = 36 + i * pct_per_step
             name_label = {
@@ -843,12 +860,16 @@ class AIEngine:
                 "LGB": "🌿 LightGBM",
                 "MLP": "🧠 NeuralNet",
             }.get(slot.name, slot.name)
+            ram_before = _rss_mb()
+            log.info(f"[AI] fit {slot.name} ... RAM_before={ram_before:.0f} MB")
             emit(f"model_{i}", start_pct, f"{name_label}...")
             time.sleep(0.1)
             with self._lock:
                 slot.fit(X, y)
             # Освобождаем память между обучением моделей (важно при LOW_MEMORY)
             gc.collect()
+            ram_after = _rss_mb()
+            log.info(f"[AI] fit {slot.name} DONE  RAM_after={ram_after:.0f} MB  delta=+{ram_after-ram_before:.0f} MB")
             emit(f"model_{i}", start_pct + pct_per_step * 0.9,
                  f"{name_label} ✓", len(X))
             time.sleep(0.05)
@@ -1256,13 +1277,16 @@ class AIEngine:
         if len(classes) < 2:
             return
 
+        log.info(f"[AI] _refit_all START · {len(self._slots)} моделей · RAM={_rss_mb():.0f} MB · samples={len(X_arr)}")
         for slot in self._slots:
+            ram_before = _rss_mb()
             try:
                 slot.fit(X_arr, y_arr, sample_weight=w_arr)
             except Exception as e:
                 log.debug(f"[AI:{slot.name}] refit error: {e}")
             # Освобождаем память между рефитами (важно при LOW_MEMORY)
             gc.collect()
+            log.info(f"[AI] refit {slot.name} DONE  RAM={_rss_mb():.0f} MB  delta=+{_rss_mb()-ram_before:.0f} MB")
 
         self._trained = True
         self._new_confirms = 0
